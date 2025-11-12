@@ -1,0 +1,3 @@
+```sh
+cargo +nightly run
+```
