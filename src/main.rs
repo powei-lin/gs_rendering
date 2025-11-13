@@ -25,11 +25,12 @@ fn main() {
         .into_os_string()
         .into_string()
         .map_err(|os_string| format!("Invalid Unicode in path: {:?}", os_string))
-        .expect("aaa");
+        .expect("failed current dir");
 
     App::new()
         .add_plugins(DefaultPlugins.set(AssetPlugin {
             file_path: current_dir_string,
+            unapproved_path_mode: bevy::asset::UnapprovedPathMode::Allow,
             ..Default::default()
         }))
         .add_plugins(GaussianSplattingPlugin)
