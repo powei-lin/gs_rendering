@@ -1,36 +1,65 @@
+use std::{env, f32::consts::FRAC_PI_2};
+
 use bevy::{core_pipeline::tonemapping::Tonemapping, prelude::*};
 use bevy_gaussian_splatting::{
-    CloudSettings, GaussianCamera, GaussianScene, GaussianSceneHandle, GaussianSplattingPlugin,
-    PlanarGaussian3d, PlanarGaussian3dHandle,
+    CloudSettings, GaussianCamera, GaussianSplattingPlugin, PlanarGaussian3d,
+    PlanarGaussian3dHandle,
 };
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
 
+use clap::Parser;
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    /// Optional name to operate on
+    file: String,
+}
+
 fn main() {
+    let cli = Cli::parse();
+    let current_dir_pathbuf = env::current_dir().expect("current dir");
+
+    // Convert PathBuf to OsString, then to String
+    let current_dir_string = current_dir_pathbuf
+        .into_os_string()
+        .into_string()
+        .map_err(|os_string| format!("Invalid Unicode in path: {:?}", os_string))
+        .expect("aaa");
+
     App::new()
-        .add_plugins(DefaultPlugins)
+        .add_plugins(DefaultPlugins.set(AssetPlugin {
+            file_path: current_dir_string,
+            ..Default::default()
+        }))
         .add_plugins(GaussianSplattingPlugin)
         .add_plugins(PanOrbitCameraPlugin)
+        .insert_resource(RenderingConfig {
+            file_path: cli.file,
+        })
         .add_systems(Startup, setup_gaussian_cloud)
         .run();
+}
+
+#[derive(Debug, Resource)]
+struct RenderingConfig {
+    pub file_path: String,
 }
 
 fn setup_gaussian_cloud(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    mut gaussian_3d_assets: ResMut<Assets<PlanarGaussian3d>>,
+    rendering_config: Res<RenderingConfig>,
 ) {
-    let input_uri = "point_cloud2.ply";
-    // let input_uri = "icecream.ply";
-    // CloudSettings and Visibility are automatically added
-    // let cloud = gaussian_3d_assets.add(PlanarGaussian3d::test_model());
-    let cloud: Handle<PlanarGaussian3d> = asset_server.load(input_uri);
-
+    let cloud: Handle<PlanarGaussian3d> = asset_server.load(&rendering_config.file_path);
+    let rotation = Quat::from_rotation_y(FRAC_PI_2) * Quat::from_rotation_x(-FRAC_PI_2);
     commands.spawn((
         PlanarGaussian3dHandle(cloud.clone()),
         CloudSettings {
             gaussian_mode: bevy_gaussian_splatting::GaussianMode::Gaussian2d,
             ..Default::default()
         },
+        Transform::from_rotation(rotation),
     ));
     commands.spawn((
         GaussianCamera { warmup: true },
