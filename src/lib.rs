@@ -1,3 +1,5 @@
+pub mod asset_tracking;
+
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 

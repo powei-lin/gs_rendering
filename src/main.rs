@@ -1,6 +1,9 @@
 use std::{env, f32::consts::FRAC_PI_2, fs};
 
-use bevy::{camera::primitives::Aabb, core_pipeline::tonemapping::Tonemapping, prelude::*};
+use bevy::{
+    app, asset::LoadedUntypedAsset, camera::primitives::Aabb,
+    core_pipeline::tonemapping::Tonemapping, prelude::*,
+};
 use bevy_gaussian_splatting::{
     CloudSettings, GaussianCamera, GaussianSplattingPlugin, PlanarGaussian3d,
     PlanarGaussian3dHandle,
@@ -8,7 +11,10 @@ use bevy_gaussian_splatting::{
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
 
 use clap::Parser;
-use gs_rendering::CameraWithPose;
+use gs_rendering::{
+    CameraWithPose,
+    asset_tracking::{LoadResource, ResourceHandles},
+};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -18,6 +24,13 @@ struct Cli {
 
     /// camera json
     cameras: Option<String>,
+}
+
+#[derive(States, Clone, Eq, PartialEq, Debug, Hash, Default)]
+enum GameState {
+    #[default]
+    Loading,
+    InGame,
 }
 
 fn main() {
@@ -38,20 +51,31 @@ fn main() {
         Vec::new()
     };
 
-    App::new()
-        .add_plugins(DefaultPlugins.set(AssetPlugin {
-            file_path: current_dir_string,
-            unapproved_path_mode: bevy::asset::UnapprovedPathMode::Allow,
-            ..Default::default()
-        }))
-        .add_plugins(GaussianSplattingPlugin)
-        .add_plugins(PanOrbitCameraPlugin)
-        .insert_resource(RenderingConfig {
-            file_path: cli.file,
-            cameras,
-        })
-        .add_systems(Startup, setup_gaussian_cloud)
-        .add_systems(Update, draw_axes)
+    let mut app = App::new();
+    app.add_plugins(DefaultPlugins.set(AssetPlugin {
+        file_path: current_dir_string,
+        unapproved_path_mode: bevy::asset::UnapprovedPathMode::Allow,
+        ..Default::default()
+    }))
+    .init_state::<GameState>()
+    .add_plugins(gs_rendering::asset_tracking::plugin)
+    .add_plugins(GaussianSplattingPlugin)
+    .add_plugins(PanOrbitCameraPlugin)
+    .insert_resource(RenderingConfig {
+        file_path: cli.file,
+        cameras,
+    })
+    // .register_type::<LevelAssets>()
+    .load_resource::<LevelAssets>();
+
+    app.add_systems(OnEnter(GameState::Loading), start_loading)
+        .add_systems(OnExit(GameState::Loading), end_loading)
+        .add_systems(
+            Update,
+            enter_game_play.run_if(in_state(GameState::Loading).and(all_assets_loaded)),
+        )
+        .add_systems(OnEnter(GameState::InGame), setup_gaussian_cloud)
+        .add_systems(Update, draw_axes.run_if(in_state(GameState::InGame)))
         .run();
 }
 
@@ -59,6 +83,33 @@ fn main() {
 struct RenderingConfig {
     pub file_path: String,
     pub cameras: Vec<CameraWithPose>,
+}
+
+fn all_assets_loaded(resource_handels: Res<ResourceHandles>) -> bool {
+    resource_handels.is_all_done()
+}
+fn start_loading() {
+    println!("start");
+}
+fn end_loading() {
+    println!("end loading");
+}
+
+#[derive(Resource, Asset, Clone, Reflect)]
+#[reflect(Resource)]
+pub struct LevelAssets {
+    #[dependency]
+    cloud: Handle<PlanarGaussian3d>,
+}
+
+impl FromWorld for LevelAssets {
+    fn from_world(world: &mut World) -> Self {
+        let asset_server = world.resource::<AssetServer>();
+        let rendering_config = world.resource::<RenderingConfig>();
+        Self {
+            cloud: asset_server.load(&rendering_config.file_path),
+        }
+    }
 }
 
 #[derive(Component)]
@@ -71,17 +122,22 @@ fn draw_axes(mut gizmos: Gizmos, query: Query<(&Transform, &Aabb), With<ShowAxes
     }
 }
 
+fn enter_game_play(mut stage: ResMut<NextState<GameState>>) {
+    stage.set(GameState::InGame);
+}
+
 fn setup_gaussian_cloud(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
+    // asset_server: Res<AssetServer>,
+    level_asset: Res<LevelAssets>,
     rendering_config: Res<RenderingConfig>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let cloud: Handle<PlanarGaussian3d> = asset_server.load(&rendering_config.file_path);
+    // let cloud: Handle<PlanarGaussian3d> = asset_server.load(&rendering_config.file_path);
     let rotation = Quat::from_rotation_y(FRAC_PI_2) * Quat::from_rotation_x(-FRAC_PI_2);
     commands.spawn((
-        PlanarGaussian3dHandle(cloud.clone()),
+        PlanarGaussian3dHandle(level_asset.cloud.clone()),
         CloudSettings {
             gaussian_mode: bevy_gaussian_splatting::GaussianMode::Gaussian2d,
             ..Default::default()
