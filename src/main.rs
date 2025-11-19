@@ -1,12 +1,10 @@
 use std::{env, f32::consts::FRAC_PI_2, fs};
 
-use bevy::{
-    app, asset::LoadedUntypedAsset, camera::primitives::Aabb,
-    core_pipeline::tonemapping::Tonemapping, prelude::*,
-};
+use bevy::{core_pipeline::tonemapping::Tonemapping, prelude::*};
 use bevy_gaussian_splatting::{
     CloudSettings, GaussianCamera, GaussianSplattingPlugin, PlanarGaussian3d,
     PlanarGaussian3dHandle,
+    sort::{SortConfig, SortTrigger},
 };
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
 
@@ -60,10 +58,12 @@ fn main() {
     .init_state::<GameState>()
     .add_plugins(gs_rendering::asset_tracking::plugin)
     .add_plugins(GaussianSplattingPlugin)
+    .insert_resource(SortConfig { period_ms: 1 })
     .add_plugins(PanOrbitCameraPlugin)
     .insert_resource(RenderingConfig {
         file_path: cli.file,
         cameras,
+        current_camera_idx: 0,
     })
     // .register_type::<LevelAssets>()
     .load_resource::<LevelAssets>();
@@ -75,7 +75,8 @@ fn main() {
             enter_game_play.run_if(in_state(GameState::Loading).and(all_assets_loaded)),
         )
         .add_systems(OnEnter(GameState::InGame), setup_gaussian_cloud)
-        .add_systems(Update, draw_axes.run_if(in_state(GameState::InGame)))
+        // .add_systems(Update, draw_axes.run_if(in_state(GameState::InGame)))
+        .add_systems(Update, update_camera.run_if(in_state(GameState::InGame)))
         .run();
 }
 
@@ -83,6 +84,7 @@ fn main() {
 struct RenderingConfig {
     pub file_path: String,
     pub cameras: Vec<CameraWithPose>,
+    pub current_camera_idx: usize,
 }
 
 fn all_assets_loaded(resource_handels: Res<ResourceHandles>) -> bool {
@@ -112,15 +114,15 @@ impl FromWorld for LevelAssets {
     }
 }
 
-#[derive(Component)]
-struct ShowAxes;
+// #[derive(Component)]
+// struct ShowAxes;
 
-fn draw_axes(mut gizmos: Gizmos, query: Query<(&Transform, &Aabb), With<ShowAxes>>) {
-    for (&transform, &aabb) in &query {
-        let length = aabb.half_extents.length();
-        gizmos.axes(transform, length);
-    }
-}
+// fn draw_axes(mut gizmos: Gizmos, query: Query<(&Transform, &Aabb), With<ShowAxes>>) {
+//     for (&transform, &aabb) in &query {
+//         let length = aabb.half_extents.length();
+//         gizmos.axes(transform, length);
+//     }
+// }
 
 fn enter_game_play(mut stage: ResMut<NextState<GameState>>) {
     stage.set(GameState::InGame);
@@ -128,39 +130,65 @@ fn enter_game_play(mut stage: ResMut<NextState<GameState>>) {
 
 fn setup_gaussian_cloud(
     mut commands: Commands,
-    // asset_server: Res<AssetServer>,
     level_asset: Res<LevelAssets>,
     rendering_config: Res<RenderingConfig>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    // let cloud: Handle<PlanarGaussian3d> = asset_server.load(&rendering_config.file_path);
-    let rotation = Quat::from_rotation_y(FRAC_PI_2) * Quat::from_rotation_x(-FRAC_PI_2);
-    commands.spawn((
-        PlanarGaussian3dHandle(level_asset.cloud.clone()),
-        CloudSettings {
-            gaussian_mode: bevy_gaussian_splatting::GaussianMode::Gaussian2d,
-            ..Default::default()
-        },
-        // Transform::from_rotation(rotation),
-    ));
-    for c in &rendering_config.cameras {
-        if !c.img_name.contains("FRONT") {
-            continue;
-        }
-        let transform = c.get_transform();
-        let s = 0.1;
-        commands.spawn((
-            Mesh3d(meshes.add(Cuboid::new(s, s, s))),
-            MeshMaterial3d(materials.add(Color::srgb(0.8, 0.7, 0.6))),
-            ShowAxes,
-            transform,
+    let cloud_entity_id = commands
+        .spawn((
+            PlanarGaussian3dHandle(level_asset.cloud.clone()),
+            CloudSettings {
+                gaussian_mode: bevy_gaussian_splatting::GaussianMode::Gaussian2d,
+                ..Default::default()
+            },
+        ))
+        .id();
+    let camera_entity_id = commands
+        .spawn((
+            GaussianCamera::default(),
+            Transform::from_translation(Vec3::new(0.0, 15.0, 50.0)),
+            Tonemapping::None,
+        ))
+        .id();
+    if rendering_config.cameras.is_empty() {
+        let rotation = Quat::from_rotation_y(FRAC_PI_2) * Quat::from_rotation_x(-FRAC_PI_2);
+        commands
+            .entity(cloud_entity_id)
+            .insert(Transform::from_rotation(rotation));
+        commands
+            .entity(camera_entity_id)
+            .insert((PanOrbitCamera::default(),));
+    } else {
+        commands.entity(camera_entity_id).insert((
+            Camera3d::default(),
+            Projection::Perspective(PerspectiveProjection::default()),
         ));
     }
-    commands.spawn((
-        GaussianCamera { warmup: true },
-        Transform::from_translation(Vec3::new(0.0, 15.0, 50.0)),
-        PanOrbitCamera::default(),
-        Tonemapping::None,
-    ));
+}
+
+fn update_camera(
+    mut query: Query<(&mut Transform, &mut Projection), With<GaussianCamera>>,
+    sort_triggers: Query<&SortTrigger>,
+    rendering_config: ResMut<RenderingConfig>,
+) {
+    if rendering_config.cameras.is_empty() {
+        return;
+    }
+    for sort_trigger in sort_triggers {
+        if sort_trigger.needs_sort {
+            println!("request sort");
+            return;
+        }
+    }
+    let (mut transform, mut projection) = query.single_mut().expect("msg");
+    println!("update camera idx {}", rendering_config.current_camera_idx);
+    let c = &rendering_config.cameras[rendering_config.current_camera_idx];
+    *transform = c.get_transform();
+    *projection = Projection::Perspective(PerspectiveProjection {
+        fov: 2.0 * (0.5 * c.height as f32 / c.fy).atan(),
+        ..Default::default()
+    });
+
+    let mut rendering_config = rendering_config;
+    rendering_config.current_camera_idx =
+        (rendering_config.current_camera_idx + 1) % rendering_config.cameras.len();
 }

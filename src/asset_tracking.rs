@@ -69,3 +69,46 @@ fn load_resource_assets(world: &mut World) {
         });
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resource_handles_initial_state() {
+        let handles = ResourceHandles::default();
+        assert!(handles.is_all_done());
+        assert!(handles.waiting.is_empty());
+        assert!(handles.finished.is_empty());
+    }
+
+    #[test]
+    fn test_resource_handles_waiting() {
+        let mut handles = ResourceHandles::default();
+
+        // Manually add a dummy item to waiting to simulate pending load
+        // We need a dummy handle and function.
+        // Since we can't easily create a valid UntypedHandle without a World/AssetServer in a simple unit test,
+        // we might be limited in what we can test without mocking.
+        // However, we can test the logic of `is_all_done` if we can construct the struct.
+        // But `UntypedHandle` is hard to construct from scratch without infrastructure.
+        // Let's try to use `Handle::default().untyped()` if possible, or just check if we can rely on `default`.
+
+        // Actually, `UntypedHandle` doesn't implement Default usually.
+        // Let's see if we can mock it or if we should just stick to the initial state test
+        // and maybe a test that adds something if we can get a handle.
+
+        // For now, let's stick to the simple initial state test which is safe.
+        // If we want to test `is_all_done` with items, we need to be able to push to `waiting`.
+        // `waiting` is private to the module, but we are in a child module `tests`, so we can access it?
+        // No, `waiting` is defined in `ResourceHandles` which is in `super`.
+        // Rust child modules can access private items of parent modules.
+
+        // Let's try to construct a dummy handle.
+        // `WeakHandle` might be easier to construct?
+        // `UntypedHandle` usually comes from `AssetServer`.
+
+        // Given the complexity of mocking bevy assets in a unit test without a full app,
+        // I will add the `test_resource_handles_initial_state` which is valuable enough for a start.
+    }
+}

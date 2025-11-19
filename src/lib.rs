@@ -1,5 +1,7 @@
 pub mod asset_tracking;
 
+use std::f32::consts::PI;
+
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +35,7 @@ impl CameraWithPose {
                 z: self.rotation[2][2],
             },
         ));
+        let rotation = rotation * Quat::from_rotation_x(PI);
         let translation = Vec3::from_array(self.position);
         let scale = Vec3::splat(1.0);
         Transform {
