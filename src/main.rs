@@ -1,6 +1,11 @@
 use std::{env, f32::consts::FRAC_PI_2, fs};
 
-use bevy::{core_pipeline::tonemapping::Tonemapping, prelude::*};
+use bevy::{
+    asset::embedded_asset,
+    core_pipeline::{Skybox, tonemapping::Tonemapping},
+    prelude::*,
+    render::render_resource::{TextureViewDescriptor, TextureViewDimension},
+};
 use bevy_gaussian_splatting::{
     CloudSettings, GaussianCamera, GaussianSplattingPlugin, PlanarGaussian3d,
     PlanarGaussian3dHandle,
@@ -31,6 +36,18 @@ enum GameState {
     InGame,
 }
 
+struct EmbeddedAssetPlugin;
+
+impl Plugin for EmbeddedAssetPlugin {
+    fn build(&self, app: &mut App) {
+        // We get to choose some prefix relative to the workspace root which
+        // will be ignored in "embedded://" asset paths.
+        // Path to asset must be relative to this file, because that's how
+        // include_bytes! works.
+        embedded_asset!(app, "data/skybox.png");
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
     let current_dir_pathbuf = env::current_dir().expect("current dir");
@@ -58,6 +75,7 @@ fn main() {
     .init_state::<GameState>()
     .add_plugins(gs_rendering::asset_tracking::plugin)
     .add_plugins(GaussianSplattingPlugin)
+    .add_plugins(EmbeddedAssetPlugin)
     .insert_resource(SortConfig { period_ms: 1 })
     .add_plugins(PanOrbitCameraPlugin)
     .insert_resource(RenderingConfig {
@@ -91,7 +109,7 @@ fn all_assets_loaded(resource_handels: Res<ResourceHandles>) -> bool {
     resource_handels.is_all_done()
 }
 fn start_loading() {
-    println!("start");
+    println!("start loading");
 }
 fn end_loading() {
     println!("end loading");
@@ -102,6 +120,8 @@ fn end_loading() {
 pub struct LevelAssets {
     #[dependency]
     cloud: Handle<PlanarGaussian3d>,
+    #[dependency]
+    skybox: Handle<Image>,
 }
 
 impl FromWorld for LevelAssets {
@@ -110,6 +130,7 @@ impl FromWorld for LevelAssets {
         let rendering_config = world.resource::<RenderingConfig>();
         Self {
             cloud: asset_server.load(&rendering_config.file_path),
+            skybox: asset_server.load("embedded://gs_rendering/data/skybox.png"),
         }
     }
 }
@@ -131,6 +152,7 @@ fn enter_game_play(mut stage: ResMut<NextState<GameState>>) {
 fn setup_gaussian_cloud(
     mut commands: Commands,
     level_asset: Res<LevelAssets>,
+    mut images: ResMut<Assets<Image>>,
     rendering_config: Res<RenderingConfig>,
 ) {
     let cloud_entity_id = commands
@@ -149,18 +171,39 @@ fn setup_gaussian_cloud(
             Tonemapping::None,
         ))
         .id();
+
+    // skybox
+    let image = images.get_mut(&level_asset.skybox).unwrap();
+    if image.texture_descriptor.array_layer_count() == 1 {
+        image.reinterpret_stacked_2d_as_array(image.height() / image.width());
+        image.texture_view_descriptor = Some(TextureViewDescriptor {
+            dimension: Some(TextureViewDimension::Cube),
+            ..default()
+        });
+    }
+    let rotation = Quat::from_rotation_y(FRAC_PI_2) * Quat::from_rotation_x(-FRAC_PI_2);
+    // camera
     if rendering_config.cameras.is_empty() {
-        let rotation = Quat::from_rotation_y(FRAC_PI_2) * Quat::from_rotation_x(-FRAC_PI_2);
         commands
             .entity(cloud_entity_id)
             .insert(Transform::from_rotation(rotation));
-        commands
-            .entity(camera_entity_id)
-            .insert((PanOrbitCamera::default(),));
+        commands.entity(camera_entity_id).insert((
+            PanOrbitCamera::default(),
+            Skybox {
+                image: level_asset.skybox.clone(),
+                brightness: 1000.0,
+                ..default()
+            },
+        ));
     } else {
         commands.entity(camera_entity_id).insert((
             Camera3d::default(),
             Projection::Perspective(PerspectiveProjection::default()),
+            Skybox {
+                image: level_asset.skybox.clone(),
+                brightness: 1000.0,
+                rotation: rotation.inverse(),
+            },
         ));
     }
 }
